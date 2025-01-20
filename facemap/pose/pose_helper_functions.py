@@ -1,22 +1,23 @@
 """
-Copright © 2023 Howard Hughes Medical Institute, Authored by Carsen Stringer and Atika Syeda.
+Copyright © 2023 Howard Hughes Medical Institute, Authored by Carsen Stringer and Atika Syeda.
 """
+
 import random
 from platform import python_version
 
-import cv2  # opencv
+import cv2  # OpenCV
 import matplotlib
 import matplotlib.pyplot as plt
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Import packages ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 import numpy as np
 import pyqtgraph as pg
-import torch  # pytorch
-from qtpy import QtWidgets, QtCore
+import torch  # PyTorch
+from qtpy import QtCore, QtWidgets
 from qtpy.QtWidgets import QDialog, QPushButton
 from scipy.ndimage import gaussian_filter
 
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Global variables~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Global variables ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 N_FACTOR = 2**4 // (2**2)
 SIGMA = 3 * 4 / N_FACTOR
 Lx = 64
@@ -24,6 +25,9 @@ Lx = 64
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Helper functions ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 def set_seed(seed):
+    """
+    Set the seed for reproducibility.
+    """
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.manual_seed(seed)
@@ -32,19 +36,9 @@ def set_seed(seed):
     random.seed(seed)
 
 
-#  Following Function adopted from cellpose:
-#  https://github.com/MouseLand/cellpose/blob/35c16c94e285a4ec2fa17f148f06bbd414deb5b8/cellpose/transforms.py#L187
 def normalize99(X, device=None):
     """
-    Normalize image so 0.0 is 1st percentile and 1.0 is 99th percentile
-     Parameters
-    -------------
-    img: ND-array
-        image of size [Ly x Lx]
-    Returns
-    --------------
-    X: ND-array
-        normalized image of size [Ly x Lx]
+    Normalize image so 0.0 is 1st percentile and 1.0 is 99th percentile.
     """
     if device is not None:
         x01 = torch.quantile(X, 0.01)
@@ -59,13 +53,7 @@ def normalize99(X, device=None):
 
 def get_rmse(predictions, gt):
     """
-    Compute Euclidean distance between predictions and ground truth
-    Parameters
-    ----------
-    predictions : ND-array of shape (n_samples, n_joints, 2)
-        Predictions from network
-    gt : ND-array of shape (n_samples, n_joints, 2)
-        Ground truth
+    Compute Euclidean distance between predictions and ground truth.
     """
     x1, y1 = predictions[:, :, 0], predictions[:, :, 1]
     x2, y2 = gt[:, :, 0], gt[:, :, 1]
@@ -73,6 +61,9 @@ def get_rmse(predictions, gt):
 
 
 def predict(net, im_input, smooth=False):
+    """
+    Predict keypoints and heatmaps from a network.
+    """
     lx = int(net.image_shape[0] / N_FACTOR)
     ly = int(net.image_shape[1] / N_FACTOR)
     batch_size = im_input.shape[0]
@@ -90,13 +81,13 @@ def predict(net, im_input, smooth=False):
         if smooth:
             hm_pred = gaussian_filter(hm_pred.cpu().numpy(), [0, 1, 1])
 
-        hm_pred = hm_pred.reshape(batch_size, num_keypoints, lx * ly)
+        hm_pred = hm_pred.reshape(batch_size, num_keypoints, lx, ly)  # Reshape heatmap
         locx_pred = locx_pred.reshape(batch_size, num_keypoints, lx * ly)
         locy_pred = locy_pred.reshape(batch_size, num_keypoints, lx * ly)
 
-        # likelihood, imax = torch.max(hm_pred, -1)
-        _, imax = torch.max(hm_pred, -1)
-        likelihood = torch.sigmoid(hm_pred)
+        # Get maximum likelihood and indices
+        _, imax = torch.max(hm_pred.view(batch_size, num_keypoints, -1), -1)
+        likelihood = torch.sigmoid(hm_pred.view(batch_size, num_keypoints, -1))
         likelihood, _ = torch.max(likelihood, -1)
         i_y = imax % lx
         i_x = torch.div(imax, lx, rounding_mode="trunc")
@@ -106,10 +97,13 @@ def predict(net, im_input, smooth=False):
     x_pred *= N_FACTOR
     y_pred *= N_FACTOR
 
-    return y_pred, x_pred, likelihood
+    return x_pred, y_pred, likelihood, hm_pred
 
 
 def numpy_predict(net, im_input, smooth=False):
+    """
+    Predict keypoints and heatmaps in NumPy format.
+    """
     lx = int(net.image_shape[0] / N_FACTOR)
     ly = int(net.image_shape[1] / N_FACTOR)
     batch_size = im_input.shape[0]
@@ -139,14 +133,12 @@ def numpy_predict(net, im_input, smooth=False):
     x_pred *= N_FACTOR
     y_pred *= N_FACTOR
 
-    return y_pred, x_pred, likelihood
+    return x_pred, y_pred, likelihood
 
 
 def randomly_adjust_contrast(img):
     """
-    Randomly adjusts contrast of image
-    img: ND-array of size nchan x Ly x Lx
-    Assumes image values in range 0 to 1
+    Randomly adjust the contrast of an image.
     """
     brange = [-0.2, 0.2]
     bdiff = brange[1] - brange[0]
@@ -164,26 +156,22 @@ def randomly_adjust_contrast(img):
     return jj
 
 
-def add_motion_blur(img, kernel_size=None, vertical=True, horizontal=True):
-    # Create the vertical kernel.
+def add_motion_blur(img, kernel_size, vertical=True, horizontal=True):
+    """
+    Add motion blur to an image.
+    """
     kernel_v = np.zeros((kernel_size, kernel_size))
-
-    # Create a copy of the same for creating the horizontal kernel.
     kernel_h = np.copy(kernel_v)
 
-    # Fill the middle row with ones.
     kernel_v[:, int((kernel_size - 1) / 2)] = np.ones(kernel_size)
     kernel_h[int((kernel_size - 1) / 2), :] = np.ones(kernel_size)
 
-    # Normalize.
     kernel_v /= kernel_size
     kernel_h /= kernel_size
 
     if vertical:
-        # Apply the vertical kernel.
         img = cv2.filter2D(img, -1, kernel_v)
     if horizontal:
-        # Apply the horizontal kernel.
         img = cv2.filter2D(img, -1, kernel_h)
 
     return img
@@ -193,17 +181,7 @@ def plot_imgs_landmarks(
     imgs, keypoints, pred_keypoints=None, cmap="jet", s=10, figsize=(10, 10)
 ):
     """
-    Plot images and keypoints in a grid.
-    Parameters
-    ----------
-    imgs : LIST of ND-arrays, float
-            list of image arrays of size [nchan x Ly x Lx] or [Ly x Lx]
-    landmarks : ND-array of shape (N, bodyparts, 2)
-            Array of landmarks.
-    Returns
-    -------
-    fig : matplotlib figure
-        Figure containing the images and landmarks.
+    Plot images with landmarks.
     """
     n_imgs = len(imgs)
     n_cols = int(np.ceil(np.sqrt(n_imgs)))
@@ -231,13 +209,16 @@ def plot_imgs_landmarks(
                     s=s * 2,
                     color=colors,
                 )
-        if i == n_imgs:
+        if i >= n_imgs:
             ax.axis("off")
     return fig
 
 
-# Following used to check cropped sections of frames
-class test_popup(QDialog):
+class TestPopup(QDialog):
+    """
+    Popup window for visualizing test frames.
+    """
+
     def __init__(self, frame, gui, title="Test Popup"):
         super().__init__(gui)
         self.gui = gui
@@ -246,9 +227,10 @@ class test_popup(QDialog):
         self.setWindowTitle(title)
         self.verticalLayout = QtWidgets.QVBoxLayout(self)
 
-        # Add image and ROI bbox
         self.win = pg.GraphicsLayoutWidget()
-        self.win.viewport().setAttribute(QtCore.Qt.WidgetAttribute.WA_AcceptTouchEvents, False)
+        self.win.viewport().setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_AcceptTouchEvents, False
+        )
         ROI_win = self.win.addViewBox(invertY=True)
         self.img = pg.ImageItem(self.frame)
         ROI_win.addItem(self.img)
@@ -258,11 +240,8 @@ class test_popup(QDialog):
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.clicked.connect(self.close)
 
-        # Position buttons
         self.widget = QtWidgets.QWidget(self)
         self.horizontalLayout = QtWidgets.QHBoxLayout(self.widget)
-        self.horizontalLayout.setContentsMargins(-1, -1, -1, 0)
-        self.horizontalLayout.setObjectName("horizontalLayout")
         self.horizontalLayout.addWidget(self.cancel_button)
         self.verticalLayout.addWidget(self.widget)
 
